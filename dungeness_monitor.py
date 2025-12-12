@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import datetime
+import time
 
 # --- APP CONFIGURATION ---
 st.set_page_config(
@@ -11,7 +12,6 @@ st.set_page_config(
 
 # --- CONSTANTS ---
 GAUGE_ID = "12048000"
-# Clean URL without the random code that caused the crash
 URL = f"https://waterservices.usgs.gov/nwis/iv/?format=json&sites={GAUGE_ID}&parameterCd=00060,00065"
 
 # --- LOGIC FUNCTIONS ---
@@ -40,16 +40,12 @@ def get_flow_status(flow):
 
 def fetch_data():
     try:
-        # We use headers to ask for fresh data nicely, instead of changing the URL
-        headers = {
-            "Cache-Control": "no-cache",
-            "Pragma": "no-cache"
-        }
+        # Standard headers to request fresh data
+        headers = {"Cache-Control": "no-cache", "Pragma": "no-cache"}
         response = requests.get(URL, headers=headers)
         
-        # Check if the server actually gave us an OK response
         if response.status_code != 200:
-            return None, f"Server Error: {response.status_code}"
+            return None, None, f"Server Error: {response.status_code}"
 
         data = response.json()
         val_item = data['value']['timeSeries'][0]['values'][0]['value'][-1]
@@ -57,16 +53,29 @@ def fetch_data():
         flow_val = float(val_item['value'])
         timestamp_str = val_item['dateTime']
         
-        dt = datetime.datetime.fromisoformat(timestamp_str)
-        formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
+        # Parse the USGS timestamp
+        dt_reading = datetime.datetime.fromisoformat(timestamp_str)
         
-        return flow_val, formatted_time
+        # Format for display
+        formatted_reading_time = dt_reading.strftime('%Y-%m-%d %H:%M:%S')
+        
+        return flow_val, dt_reading, formatted_reading_time
     except Exception as e:
-        return None, str(e)
+        return None, None, str(e)
 
-def generate_html(flow, timestamp, gauge_id):
+def generate_html(flow, reading_time_str, reading_dt_obj, gauge_id):
     status = get_flow_status(flow)
     
+    # Calculate how old the data is
+    # Note: We use the server's local time for "now" comparison to avoid timezone math errors
+    # This is an approximation for display purposes
+    now = datetime.datetime.now(reading_dt_obj.tzinfo) 
+    diff = now - reading_dt_obj
+    minutes_old = int(diff.total_seconds() / 60)
+    
+    age_text = f"{minutes_old} min ago" if minutes_old < 60 else f"{minutes_old // 60} hrs ago"
+
+    # Blink CSS
     blink_css = ""
     if status['blink']:
         blink_css = """
@@ -107,8 +116,8 @@ def generate_html(flow, timestamp, gauge_id):
     <div class="app-wrapper"><div class="app-container">
         <div style="font-size:24px; font-weight:bold; margin-bottom:20px; text-align:center;">{status['text']}</div>
         <div style="font-size:24px; font-weight:bold; margin-bottom:5px;">Current Flow: {flow} CFS</div>
-        <div style="font-size:10px; margin-bottom:2px;">Last Updated: {timestamp}</div>
-        <div style="font-size:10px; margin-bottom:2px;">USGS Gauge: {gauge_id}</div>
+        <div style="font-size:12px; margin-bottom:2px;">Reading Time: {reading_time_str}</div>
+        <div style="font-size:14px; font-weight:bold; margin-bottom:2px; background-color:rgba(0,0,0,0.2); padding: 2px 8px; border-radius:4px;">(Data is {age_text} old)</div>
         <hr style="width:50%; border-color:white; opacity:0.5; margin:20px 0;">
         <div style="width:90%; margin-top:25px; margin-bottom:15px;">
             <div style="text-align:center; margin-bottom:5px; font-weight:bold;">Categories of Total River Flow</div>
@@ -127,14 +136,25 @@ def generate_html(flow, timestamp, gauge_id):
 # --- MAIN APP LAYOUT ---
 st.title("🌊 Dungeness River Monitor")
 
+# REFRESH BUTTON
 if st.button('🔄 Update River Data Now', use_container_width=True):
     st.cache_data.clear()
-    st.toast('Checking USGS servers...', icon='📡')
+    st.toast('Contacting USGS...', icon='📡')
+    time.sleep(0.5) # Slight pause so you see the toast
     st.rerun()
 
-flow, timestamp = fetch_data()
+# FETCH DATA
+flow, reading_dt, reading_str = fetch_data()
 
+# DISPLAY
 if flow is not None:
-    st.markdown(generate_html(flow, timestamp, GAUGE_ID), unsafe_allow_html=True)
+    # 1. Render the main graphical app
+    st.markdown(generate_html(flow, reading_str, reading_dt, GAUGE_ID), unsafe_allow_html=True)
+    
+    # 2. Show the "System Check Time" below the graphic
+    current_time = datetime.datetime.now().strftime('%H:%M:%S')
+    st.success(f"✅ App successfully checked USGS servers at: {current_time}")
+    st.caption("Note: The river gauge uploads data every 15-60 minutes. If 'Reading Time' is older than 'App Checked', the gauge has not sent new data yet.")
+
 else:
-    st.error(f"Error fetching data: {timestamp}")
+    st.error(f"Error fetching data: {reading_str}")
