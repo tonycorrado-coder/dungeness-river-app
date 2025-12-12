@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import datetime
-import random  # <--- New tool for cache busting
 
 # --- APP CONFIGURATION ---
 st.set_page_config(
@@ -12,7 +11,8 @@ st.set_page_config(
 
 # --- CONSTANTS ---
 GAUGE_ID = "12048000"
-# We removed the URL from here to build it dynamically later
+# Clean URL without the random code that caused the crash
+URL = f"https://waterservices.usgs.gov/nwis/iv/?format=json&sites={GAUGE_ID}&parameterCd=00060,00065"
 
 # --- LOGIC FUNCTIONS ---
 def get_flow_status(flow):
@@ -40,19 +40,23 @@ def get_flow_status(flow):
 
 def fetch_data():
     try:
-        # CACHE BUSTER: We add a random number to the end of the URL.
-        # This forces the USGS server to treat this as a brand new request every time.
-        random_code = random.randint(1, 1000000)
-        safe_url = f"https://waterservices.usgs.gov/nwis/iv/?format=json&sites={GAUGE_ID}&parameterCd=00060,00065&cb={random_code}"
+        # We use headers to ask for fresh data nicely, instead of changing the URL
+        headers = {
+            "Cache-Control": "no-cache",
+            "Pragma": "no-cache"
+        }
+        response = requests.get(URL, headers=headers)
         
-        response = requests.get(safe_url)
+        # Check if the server actually gave us an OK response
+        if response.status_code != 200:
+            return None, f"Server Error: {response.status_code}"
+
         data = response.json()
         val_item = data['value']['timeSeries'][0]['values'][0]['value'][-1]
         
         flow_val = float(val_item['value'])
         timestamp_str = val_item['dateTime']
         
-        # Format time nicely
         dt = datetime.datetime.fromisoformat(timestamp_str)
         formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
         
@@ -63,7 +67,6 @@ def fetch_data():
 def generate_html(flow, timestamp, gauge_id):
     status = get_flow_status(flow)
     
-    # Blink CSS
     blink_css = ""
     if status['blink']:
         blink_css = """
@@ -71,7 +74,6 @@ def generate_html(flow, timestamp, gauge_id):
         .app-container { animation: blinker 2s linear infinite; }
         """
 
-    # Bar Segments
     category_defs = [
         (0, 62.5, "#FF0000"), (62.5, 120, "#FFBF00"), (120, 238, "#FFFF00"),
         (238, 582, "#0099FF"), (582, 2700, "#800080"), (2700, 4275, "#FFBF00"),
@@ -80,7 +82,6 @@ def generate_html(flow, timestamp, gauge_id):
     total_scale = 7000
     bar_html = "".join([f'<div style="width:{(e-s)/total_scale*100}%; background-color:{c}; height:100%; float:left; border-right:1px solid white; box-sizing:border-box;"></div>' for s,e,c in category_defs])
     
-    # Markers
     top_marker = min((flow / total_scale) * 100, 100)
     
     range_span = status['range_max'] - status['range_min']
@@ -126,13 +127,8 @@ def generate_html(flow, timestamp, gauge_id):
 # --- MAIN APP LAYOUT ---
 st.title("🌊 Dungeness River Monitor")
 
-# We create a placeholder for messages
-msg_container = st.empty()
-
 if st.button('🔄 Update River Data Now', use_container_width=True):
-    # This clears the cache for this specific function to be triple sure
     st.cache_data.clear()
-    # We show a "Toast" message that pops up
     st.toast('Checking USGS servers...', icon='📡')
     st.rerun()
 
