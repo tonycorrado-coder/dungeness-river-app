@@ -15,13 +15,9 @@ URL = f"https://waterservices.usgs.gov/nwis/iv/?format=json&sites={GAUGE_ID}&par
 
 # --- LOGIC FUNCTIONS ---
 def get_flow_status(flow):
-    """
-    Determines status, colors, and text based on flow value (CFS).
-    """
-    # Default safe values
+    # [cite_start]Logic per requirements [cite: 6-19]
     status = {"bg_color": "white", "text": "Unknown Flow", "blink": False, "range_min": 0, "range_max": 100}
 
-    # Logic per requirements
     if 0 <= flow <= 62.5:
         status = {"bg_color": "#FF0000", "text": "Extremely Low- Salmon Endangered", "blink": True, "range_min": 0, "range_max": 62.5}
     elif 62.5 < flow <= 120:
@@ -46,182 +42,85 @@ def fetch_data():
         response = requests.get(URL)
         data = response.json()
         val_item = data['value']['timeSeries'][0]['values'][0]['value'][-1]
-        
         flow_val = float(val_item['value'])
         timestamp_str = val_item['dateTime']
-        
-        # Format time nicely
         dt = datetime.datetime.fromisoformat(timestamp_str)
-        formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
-        
-        return flow_val, formatted_time
+        return flow_val, dt.strftime('%Y-%m-%d %H:%M:%S')
     except Exception as e:
         return None, str(e)
 
 def generate_html(flow, timestamp, gauge_id):
     status = get_flow_status(flow)
     
-    # Blink Animation CSS
+    # Blink CSS
     blink_css = ""
     if status['blink']:
-        blink_css = f"""
-        @keyframes blinker {{
-            0% {{ opacity: 1; }}
-            50% {{ opacity: 0.7; background-color: #333; }}
-            100% {{ opacity: 1; }}
-        }}
-        .app-container {{
-            animation: blinker 2s linear infinite;
-        }}
+        blink_css = """
+        @keyframes blinker { 0% { opacity: 1; } 50% { opacity: 0.7; background-color: #333; } 100% { opacity: 1; } }
+        .app-container { animation: blinker 2s linear infinite; }
         """
 
-    # Bar Graph 1: Total Flow Categories (0-7000 scale)
+    # Bar Segments
     category_defs = [
         (0, 62.5, "#FF0000"), (62.5, 120, "#FFBF00"), (120, 238, "#FFFF00"),
         (238, 582, "#0099FF"), (582, 2700, "#800080"), (2700, 4275, "#FFBF00"),
         (4275, 6200, "#FF0000"), (6200, 7000, "#8B0000")
     ]
-    
     total_scale = 7000
-    bar_html_segments = ""
+    bar_html = "".join([f'<div style="width:{(e-s)/total_scale*100}%; background-color:{c}; height:100%; float:left; border-right:1px solid white; box-sizing:border-box;"></div>' for s,e,c in category_defs])
     
-    for start, end, color in category_defs:
-        segment_width = end - start
-        width_pct = (segment_width / total_scale) * 100
-        bar_html_segments += f'<div style="width: {width_pct}%; background-color: {color}; height: 100%; float: left; border-right: 1px solid white; box-sizing: border-box;"></div>'
-        
-    total_marker_pos = min((flow / total_scale) * 100, 100)
+    # Markers
+    top_marker = min((flow / total_scale) * 100, 100)
     
-    # Bar Graph 2: Current Context
     range_span = status['range_max'] - status['range_min']
-    
-    # Handle overflow > 6200
     if status['range_min'] == 6200:
         display_max = max(7000, flow * 1.1) 
         range_span = display_max - 6200
-        range_max_label = f"{int(display_max)}"
+        range_max_lbl = f"{int(display_max)}"
     else:
-        range_max_label = f"{status['range_max']}"
-
-    if range_span == 0: range_span = 1 
-    current_marker_pos = max(0, min(((flow - status['range_min']) / range_span) * 100, 100))
+        range_max_lbl = f"{status['range_max']}"
+    if range_span == 0: range_span = 1
     
-    html_content = f"""
+    btm_marker = max(0, min(((flow - status['range_min']) / range_span) * 100, 100))
+
+    return f"""
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap');
-        
-        .app-wrapper {{
-            width: 100%;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            font-family: 'Roboto', sans-serif;
-            color: white;
-            text-shadow: 1px 1px 2px black;
-        }}
-        
-        .app-container {{
-            width: 100%;
-            max-width: 600px; /* Constrain width for desktop looks */
-            background-color: {status['bg_color']};
-            padding: 20px;
-            box-sizing: border-box;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            border-radius: 10px;
-            {blink_css}
-        }}
-        
-        .main-text {{ font-size: 24px; font-weight: bold; margin-bottom: 20px; text-align: center; }}
-        .flow-val {{ font-size: 24px; font-weight: bold; margin-bottom: 5px; }}
-        .meta-info {{ font-size: 10px; margin-bottom: 2px; }}
-        
-        .graph-container {{
-            width: 90%;
-            margin-top: 25px;
-            margin-bottom: 15px;
-        }}
-        
-        .bar-border {{
-            border: 2px solid white;
-            height: 40px; 
-            width: 100%; 
-            position: relative;
-            background-color: #333;
-            overflow: hidden;
-        }}
-        
-        .triangle-marker {{
-            width: 0; 
-            height: 0; 
-            border-left: 10px solid transparent;
-            border-right: 10px solid transparent;
-            border-bottom: 15px solid white;
-            position: absolute;
-            bottom: 0px;
-            transform: translateX(-50%);
-            z-index: 20;
-        }}
-        
-        .axis-labels {{
-            display: flex;
-            justify-content: space-between;
-            font-size: 14px;
-            margin-top: 5px;
-            color: white;
-            font-weight: bold;
-            text-shadow: 1px 1px 2px black;
-        }}
+        .app-wrapper {{ width: 100%; display: flex; justify-content: center; font-family: 'Roboto', sans-serif; color: white; text-shadow: 1px 1px 2px black; }}
+        .app-container {{ width: 100%; max-width: 600px; background-color: {status['bg_color']}; padding: 20px; border-radius: 10px; display: flex; flex-direction: column; align-items: center; {blink_css} }}
+        .bar-border {{ border: 2px solid white; height: 40px; width: 100%; position: relative; background-color: #333; overflow: hidden; }}
+        .triangle-marker {{ width:0; height:0; border-left:10px solid transparent; border-right:10px solid transparent; border-bottom:15px solid white; position:absolute; bottom:0; transform:translateX(-50%); z-index:20; }}
+        .axis-labels {{ display: flex; justify-content: space-between; font-size: 14px; margin-top: 5px; font-weight: bold; width: 100%; color: white; }}
     </style>
-    
-    <div class="app-wrapper">
-        <div class="app-container">
-            <div class="main-text">{status['text']}</div>
-            <div class="flow-val">Current Flow: {flow} CFS</div>
-            <div class="meta-info">Last Updated: {timestamp}</div>
-            <div class="meta-info">USGS Gauge: {gauge_id}</div>
-            <hr style="width: 50%; border-color: white; opacity: 0.5; margin: 20px 0;">
-            
-            <div class="graph-container">
-                <div style="text-align: center; margin-bottom: 5px; font-weight: bold;">Categories of Total River Flow</div>
-                <div class="bar-border">
-                    {bar_html_segments}
-                    <div class="triangle-marker" style="left: {total_marker_pos}%;"></div>
-                </div>
-            </div>
-
-            <div class="graph-container">
-                <div style="text-align: center; margin-bottom: 5px; font-weight: bold;">Categories of Current River Flow</div>
-                <div class="bar-border" style="background-color: {status['bg_color']};">
-                    <div class="triangle-marker" style="left: {current_marker_pos}%;"></div>
-                </div>
-                <div class="axis-labels">
-                    <span>{status['range_min']} CFS</span>
-                    <span>{range_max_label} CFS</span>
-                </div>
-            </div>
+    <div class="app-wrapper"><div class="app-container">
+        <div style="font-size:24px; font-weight:bold; margin-bottom:20px; text-align:center;">{status['text']}</div>
+        <div style="font-size:24px; font-weight:bold; margin-bottom:5px;">Current Flow: {flow} CFS</div>
+        <div style="font-size:10px; margin-bottom:2px;">Last Updated: {timestamp}</div>
+        <div style="font-size:10px; margin-bottom:2px;">USGS Gauge: {gauge_id}</div>
+        <hr style="width:50%; border-color:white; opacity:0.5; margin:20px 0;">
+        <div style="width:90%; margin-top:25px; margin-bottom:15px;">
+            <div style="text-align:center; margin-bottom:5px; font-weight:bold;">Categories of Total River Flow</div>
+            <div class="bar-border">{bar_html}<div class="triangle-marker" style="left:{top_marker}%;"></div></div>
         </div>
-    </div>
+        <div style="width:90%; margin-top:25px; margin-bottom:15px;">
+            <div style="text-align:center; margin-bottom:5px; font-weight:bold;">Categories of Current River Flow</div>
+            <div class="bar-border" style="background-color:{status['bg_color']};">
+                <div class="triangle-marker" style="left:{btm_marker}%;"></div>
+            </div>
+            <div class="axis-labels"><span>{status['range_min']} CFS</span><span>{range_max_lbl} CFS</span></div>
+        </div>
+    </div></div>
     """
-    return html_content
 
 # --- MAIN APP LAYOUT ---
 st.title("🌊 Dungeness River Monitor")
 
-# Refresh Button
 if st.button('🔄 Update River Data Now', use_container_width=True):
     st.rerun()
 
-# Fetch and Display
 flow, timestamp = fetch_data()
 
 if flow is not None:
-    # Render the custom HTML component
     st.markdown(generate_html(flow, timestamp, GAUGE_ID), unsafe_allow_html=True)
 else:
     st.error(f"Error fetching data: {timestamp}")
-
-# Auto-refresh note
-st.caption("Click 'Update' to refresh immediately. Data provided by USGS.")
