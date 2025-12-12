@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import datetime
+import random  # <--- New tool for cache busting
 
 # --- APP CONFIGURATION ---
 st.set_page_config(
@@ -11,7 +12,7 @@ st.set_page_config(
 
 # --- CONSTANTS ---
 GAUGE_ID = "12048000"
-URL = f"https://waterservices.usgs.gov/nwis/iv/?format=json&sites={GAUGE_ID}&parameterCd=00060,00065"
+# We removed the URL from here to build it dynamically later
 
 # --- LOGIC FUNCTIONS ---
 def get_flow_status(flow):
@@ -39,13 +40,23 @@ def get_flow_status(flow):
 
 def fetch_data():
     try:
-        response = requests.get(URL)
+        # CACHE BUSTER: We add a random number to the end of the URL.
+        # This forces the USGS server to treat this as a brand new request every time.
+        random_code = random.randint(1, 1000000)
+        safe_url = f"https://waterservices.usgs.gov/nwis/iv/?format=json&sites={GAUGE_ID}&parameterCd=00060,00065&cb={random_code}"
+        
+        response = requests.get(safe_url)
         data = response.json()
         val_item = data['value']['timeSeries'][0]['values'][0]['value'][-1]
+        
         flow_val = float(val_item['value'])
         timestamp_str = val_item['dateTime']
+        
+        # Format time nicely
         dt = datetime.datetime.fromisoformat(timestamp_str)
-        return flow_val, dt.strftime('%Y-%m-%d %H:%M:%S')
+        formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
+        
+        return flow_val, formatted_time
     except Exception as e:
         return None, str(e)
 
@@ -115,7 +126,14 @@ def generate_html(flow, timestamp, gauge_id):
 # --- MAIN APP LAYOUT ---
 st.title("🌊 Dungeness River Monitor")
 
+# We create a placeholder for messages
+msg_container = st.empty()
+
 if st.button('🔄 Update River Data Now', use_container_width=True):
+    # This clears the cache for this specific function to be triple sure
+    st.cache_data.clear()
+    # We show a "Toast" message that pops up
+    st.toast('Checking USGS servers...', icon='📡')
     st.rerun()
 
 flow, timestamp = fetch_data()
