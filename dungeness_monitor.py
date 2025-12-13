@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import datetime
+import time
 
 # --- APP CONFIGURATION ---
 st.set_page_config(
@@ -52,7 +53,6 @@ def fetch_data():
         flow_val = float(val_item['value'])
         timestamp_str = val_item['dateTime']
         
-        # Parse and format the USGS timestamp
         dt_reading = datetime.datetime.fromisoformat(timestamp_str)
         formatted_reading_time = dt_reading.strftime('%Y-%m-%d %H:%M:%S')
         
@@ -121,18 +121,22 @@ def generate_html(flow, reading_time_str, gauge_id):
     </div></div>
     """
 
-# --- MAIN APP LAYOUT ---
+# --- MAIN APP (AUTO-REFRESHING FRAGMENT) ---
 st.title("🌊 Dungeness River Monitor")
 
-# FETCH DATA (Runs automatically on load)
-flow, reading_str = fetch_data()
-
-# DISPLAY
-if flow is not None:
-    st.markdown(generate_html(flow, reading_str, GAUGE_ID), unsafe_allow_html=True)
+# This "fragment" decorator tells Streamlit to re-run this function 
+# automatically every 60 seconds.
+@st.fragment(run_every=60)
+def show_river_data():
+    flow, reading_str = fetch_data()
     
-    # Simple, unobtrusive system check note
-    current_time = datetime.datetime.now().strftime('%H:%M:%S')
-    st.caption(f"App checked USGS servers at: {current_time}")
-else:
-    st.error(f"Error fetching data: {reading_str}")
+    if flow is not None:
+        st.markdown(generate_html(flow, reading_str, GAUGE_ID), unsafe_allow_html=True)
+        # Update timestamp to show it's alive
+        current_time = datetime.datetime.now().strftime('%H:%M:%S')
+        st.caption(f"Live View | Auto-checking server every 60s | Last check: {current_time}")
+    else:
+        st.error(f"Error fetching data: {reading_str}")
+
+# Run the fragment
+show_river_data()
