@@ -44,7 +44,7 @@ def fetch_data():
         response = requests.get(URL, headers=headers)
         
         if response.status_code != 200:
-            return None, None, f"Server Error: {response.status_code}"
+            return None, f"Server Error: {response.status_code}"
 
         data = response.json()
         val_item = data['value']['timeSeries'][0]['values'][0]['value'][-1]
@@ -52,26 +52,17 @@ def fetch_data():
         flow_val = float(val_item['value'])
         timestamp_str = val_item['dateTime']
         
-        # Parse the USGS timestamp
+        # Parse and format the USGS timestamp
         dt_reading = datetime.datetime.fromisoformat(timestamp_str)
-        
-        # Format for display
         formatted_reading_time = dt_reading.strftime('%Y-%m-%d %H:%M:%S')
         
-        return flow_val, dt_reading, formatted_reading_time
+        return flow_val, formatted_reading_time
     except Exception as e:
-        return None, None, str(e)
+        return None, str(e)
 
-def generate_html(flow, reading_time_str, reading_dt_obj, gauge_id):
+def generate_html(flow, reading_time_str, gauge_id):
     status = get_flow_status(flow)
     
-    # Calculate how old the data is
-    now = datetime.datetime.now(reading_dt_obj.tzinfo) 
-    diff = now - reading_dt_obj
-    minutes_old = int(diff.total_seconds() / 60)
-    
-    age_text = f"{minutes_old} min ago" if minutes_old < 60 else f"{minutes_old // 60} hrs ago"
-
     # Blink CSS
     blink_css = ""
     if status['blink']:
@@ -113,8 +104,8 @@ def generate_html(flow, reading_time_str, reading_dt_obj, gauge_id):
     <div class="app-wrapper"><div class="app-container">
         <div style="font-size:24px; font-weight:bold; margin-bottom:20px; text-align:center;">{status['text']}</div>
         <div style="font-size:24px; font-weight:bold; margin-bottom:5px;">Current Flow: {flow} CFS</div>
-        <div style="font-size:12px; margin-bottom:2px;">Reading Time: {reading_time_str}</div>
-        <div style="font-size:14px; font-weight:bold; margin-bottom:2px; background-color:rgba(0,0,0,0.2); padding: 2px 8px; border-radius:4px;">(Data is {age_text} old)</div>
+        <div style="font-size:10px; margin-bottom:2px;">Last Updated: {reading_time_str}</div>
+        <div style="font-size:10px; margin-bottom:2px;">USGS Gauge: {gauge_id}</div>
         <hr style="width:50%; border-color:white; opacity:0.5; margin:20px 0;">
         <div style="width:90%; margin-top:25px; margin-bottom:15px;">
             <div style="text-align:center; margin-bottom:5px; font-weight:bold;">Categories of Total River Flow</div>
@@ -134,14 +125,13 @@ def generate_html(flow, reading_time_str, reading_dt_obj, gauge_id):
 st.title("🌊 Dungeness River Monitor")
 
 # FETCH DATA (Runs automatically on load)
-flow, reading_dt, reading_str = fetch_data()
+flow, reading_str = fetch_data()
 
 # DISPLAY
 if flow is not None:
-    # 1. Render the main graphical app
-    st.markdown(generate_html(flow, reading_str, reading_dt, GAUGE_ID), unsafe_allow_html=True)
+    st.markdown(generate_html(flow, reading_str, GAUGE_ID), unsafe_allow_html=True)
     
-    # 2. Show the "System Check Time" below the graphic
+    # Simple, unobtrusive system check note
     current_time = datetime.datetime.now().strftime('%H:%M:%S')
     st.caption(f"App checked USGS servers at: {current_time}")
 else:
