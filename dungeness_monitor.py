@@ -12,8 +12,8 @@ st.set_page_config(
 
 # --- CONSTANTS ---
 GAUGE_ID = "12048000"
-# New API endpoint for 2026 standards
-URL = f"https://api.waterdata.usgs.gov/ogcapi/collections/continuous-values/items?requestType=latest&f=json&monitoringLocationIdentifier=USGS-{GAUGE_ID}&parameterCode=00060"
+# Updated to the official OGC v0 stable endpoint
+URL = f"https://api.waterdata.usgs.gov/ogcapi/v0/collections/latest-continuous/items?f=json&monitoringLocationIdentifier=USGS-{GAUGE_ID}&parameterCode=00060"
 
 # --- LOGIC FUNCTIONS ---
 def get_flow_status(flow):
@@ -40,39 +40,41 @@ def get_flow_status(flow):
     return status
 
 def fetch_data():
-    """Fetches the latest flow data from the new USGS API."""
+    """Fetches the latest flow data from the stable OGC API."""
     try:
-        headers = {"Accept": "application/json", "Cache-Control": "no-cache"}
-        response = requests.get(URL, headers=headers, timeout=10)
+        headers = {"Accept": "application/json"}
+        response = requests.get(URL, headers=headers, timeout=15)
         
         if response.status_code != 200:
-            return None, f"USGS API Error: {response.status_code}"
+            return None, f"USGS API Error {response.status_code}: {response.reason}"
 
         data = response.json()
         
-        # New API structure validation
+        # OGC API returns a 'features' list
         if 'features' in data and len(data['features']) > 0:
-            feature = data['features'][0]
-            flow_val = float(feature['properties']['value'])
-            timestamp_str = feature['properties']['phenomenonTime']
+            props = data['features'][0]['properties']
+            flow_val = float(props['value'])
+            # The time is stored in 'phenomenonTime'
+            timestamp_str = props.get('phenomenonTime', props.get('time', 'Unknown Time'))
             
-            # ISO Time compatibility
-            clean_timestamp = timestamp_str.replace('Z', '+00:00')
-            dt_reading = datetime.datetime.fromisoformat(clean_timestamp)
-            formatted_reading_time = dt_reading.strftime('%Y-%m-%d %H:%M:%S')
-            
-            return flow_val, formatted_reading_time
+            # Formatting the time for display
+            try:
+                dt = datetime.datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                formatted_time = dt.strftime('%Y-%m-%d %H:%M:%S')
+            except:
+                formatted_time = timestamp_str
+
+            return flow_val, formatted_time
         else:
-            return None, "No recent data available for this gauge."
+            return None, "No data found for this site in the latest-continuous collection."
             
     except Exception as e:
-        return None, f"Connection Error: {str(e)}"
+        return None, f"Connection/Parsing Error: {str(e)}"
 
 def generate_html(flow, reading_time_str, gauge_id):
-    """Generates the custom styled dashboard UI."""
+    """Generates the dashboard UI with dynamic styling."""
     status = get_flow_status(flow)
     
-    # Blink CSS logic
     blink_css = ""
     if status['blink']:
         blink_css = """
@@ -80,6 +82,7 @@ def generate_html(flow, reading_time_str, gauge_id):
         .app-container { animation: blinker 2s linear infinite; }
         """
 
+    # UI Scales
     category_defs = [
         (0, 62.5, "#FF0000"), (62.5, 120, "#FFBF00"), (120, 238, "#FFFF00"),
         (238, 582, "#0099FF"), (582, 2700, "#800080"), (2700, 4275, "#FFBF00"),
@@ -89,17 +92,9 @@ def generate_html(flow, reading_time_str, gauge_id):
     bar_html = "".join([f'<div style="width:{(e-s)/total_scale*100}%; background-color:{c}; height:100%; float:left; border-right:1px solid white; box-sizing:border-box;"></div>' for s,e,c in category_defs])
     
     top_marker = min((flow / total_scale) * 100, 100)
-    
-    range_span = status['range_max'] - status['range_min']
-    if status['range_min'] == 6200:
-        display_max = max(7000, flow * 1.1) 
-        range_span = display_max - 6200
-        range_max_lbl = f"{int(display_max)}"
-    else:
-        range_max_lbl = f"{status['range_max']}"
-    
-    if range_span == 0: range_span = 1
+    range_span = max(1, status['range_max'] - status['range_min'])
     btm_marker = max(0, min(((flow - status['range_min']) / range_span) * 100, 100))
+    range_max_lbl = "9999+" if status['range_max'] > 90000 else f"{status['range_max']}"
 
     return f"""
     <style>
@@ -113,7 +108,7 @@ def generate_html(flow, reading_time_str, gauge_id):
     <div class="app-wrapper"><div class="app-container">
         <div style="font-size:24px; font-weight:bold; margin-bottom:20px; text-align:center;">{status['text']}</div>
         <div style="font-size:24px; font-weight:bold; margin-bottom:5px;">Current Flow: {flow} CFS</div>
-        <div style="font-size:10px; margin-bottom:2px;">Last USGS Reading: {reading_time_str}</div>
+        <div style="font-size:10px; margin-bottom:2px;">Last Sensor Reading: {reading_time_str}</div>
         <div style="font-size:10px; margin-bottom:2px;">USGS Gauge: {gauge_id}</div>
         <hr style="width:50%; border-color:white; opacity:0.5; margin:20px 0;">
         <div style="width:90%; margin-top:25px; margin-bottom:15px;">
@@ -121,7 +116,7 @@ def generate_html(flow, reading_time_str, gauge_id):
             <div class="bar-border">{bar_html}<div class="triangle-marker" style="left:{top_marker}%;"></div></div>
         </div>
         <div style="width:90%; margin-top:25px; margin-bottom:15px;">
-            <div style="text-align:center; margin-bottom:5px; font-weight:bold;">Categories of Current River Flow</div>
+            <div style="text-align:center; margin-bottom:5px; font-weight:bold;">Category Zoom (0-100%)</div>
             <div class="bar-border" style="background-color:{status['bg_color']};">
                 <div class="triangle-marker" style="left:{btm_marker}%;"></div>
             </div>
@@ -140,8 +135,11 @@ def show_river_data():
     if flow is not None:
         st.markdown(generate_html(flow, reading_str, GAUGE_ID), unsafe_allow_html=True)
         current_time = datetime.datetime.now().strftime('%H:%M:%S')
-        st.caption(f"Status: Live | Last sync: {current_time}")
+        st.caption(f"Status: Live | Auto-refreshing | Last sync: {current_time}")
     else:
         st.error(f"Error fetching data: {reading_str}")
+        st.info("The USGS site might be undergoing maintenance. Retrying in 60 seconds...")
+
+show_river_data()
 
 show_river_data()
